@@ -1,0 +1,8 @@
+.git
+.gitignore
+*.bbolt
+*.log
+bin
+dist
+dns-swr
+dns-swr.exe

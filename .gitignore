@@ -1,0 +1,8 @@
+dns-swr
+dns-swr.exe
+*.bbolt
+*.log
+dist/
+bin/
+.idea/
+.vscode/

@@ -1,0 +1,32 @@
+listen:
+  udp: ":53"
+  tcp: ":53"
+
+admin:
+  enabled: true
+  address: "0.0.0.0:8053"
+
+upstreams:
+  - "1.1.1.1:53"
+  - "8.8.8.8:53"
+  - "9.9.9.9:53"
+  - "208.67.222.222:53"
+  - "185.51.200.2:53"
+
+timeouts:
+  upstreamTimeout: "1200ms"
+
+cache:
+  maxStale: "720h"
+  staleClientTTL: 30
+  maxFreshClientTTL: 3600
+  negativeCacheTTL: 300
+  serveStaleForNegative: false
+  refreshConcurrency: 50
+  persistence: "memory"
+  path: "./dns-swr.bbolt"
+
+policy:
+  blockTXT: true
+  blockAAAA: true
+  retryOnSERVFAIL: true

@@ -1,0 +1,14 @@
+services:
+  dns-swr:
+    build: .
+    image: dns-swr:local
+    ports:
+      - "5353:53/udp"
+      - "5353:53/tcp"
+      - "127.0.0.1:8053:8053"
+    volumes:
+      - ./configs/config.example.yaml:/app/config.yaml:ro
+      - dns-swr-data:/app/data
+
+volumes:
+  dns-swr-data:
