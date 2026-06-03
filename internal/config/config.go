@@ -80,6 +80,11 @@ type PolicyConfig struct {
 	RetryOnSERVFAIL bool `yaml:"retryOnSERVFAIL"`
 }
 
+type StaticConfig struct {
+	Records map[string]string `yaml:"records"`
+	TTL     uint32            `yaml:"ttl"`
+}
+
 type Config struct {
 	Listen    ListenConfig  `yaml:"listen"`
 	Admin     AdminConfig   `yaml:"admin"`
@@ -87,6 +92,7 @@ type Config struct {
 	Timeouts  TimeoutConfig `yaml:"timeouts"`
 	Cache     CacheConfig   `yaml:"cache"`
 	Policy    PolicyConfig  `yaml:"policy"`
+	Static    StaticConfig  `yaml:"static"`
 }
 
 func DefaultConfig() Config {
@@ -123,6 +129,10 @@ func DefaultConfig() Config {
 			BlockTXT:        true,
 			BlockAAAA:       true,
 			RetryOnSERVFAIL: true,
+		},
+		Static: StaticConfig{
+			Records: map[string]string{},
+			TTL:     60,
 		},
 	}
 }
@@ -163,6 +173,20 @@ func (c *Config) applyDefaults() {
 	for i, upstream := range c.Upstreams {
 		c.Upstreams[i] = normalizeProviderAddress(upstream)
 	}
+	if c.Static.Records == nil {
+		c.Static.Records = map[string]string{}
+	}
+	if c.Static.TTL == 0 {
+		c.Static.TTL = 60
+	}
+	normalizedStatic := make(map[string]string, len(c.Static.Records))
+	for domain, ip := range c.Static.Records {
+		normalizedDomain := normalizeStaticDomain(domain)
+		if normalizedDomain != "" {
+			normalizedStatic[normalizedDomain] = strings.TrimSpace(ip)
+		}
+	}
+	c.Static.Records = normalizedStatic
 }
 
 func (c *Config) applyEnvOverrides() {
@@ -170,20 +194,44 @@ func (c *Config) applyEnvOverrides() {
 	if upstreams == "" {
 		upstreams = strings.TrimSpace(os.Getenv("DNS_SWR_REMOTE_DNS_PROVIDERS"))
 	}
-	if upstreams == "" {
-		return
-	}
-
-	parts := strings.Split(upstreams, ",")
-	parsed := make([]string, 0, len(parts))
-	for _, part := range parts {
-		provider := normalizeProviderAddress(part)
-		if provider != "" {
-			parsed = append(parsed, provider)
+	if upstreams != "" {
+		parts := strings.Split(upstreams, ",")
+		parsed := make([]string, 0, len(parts))
+		for _, part := range parts {
+			provider := normalizeProviderAddress(part)
+			if provider != "" {
+				parsed = append(parsed, provider)
+			}
+		}
+		if len(parsed) > 0 {
+			c.Upstreams = parsed
 		}
 	}
-	if len(parsed) > 0 {
-		c.Upstreams = parsed
+
+	staticRecords := strings.TrimSpace(os.Getenv("DNS_SWR_STATIC_RECORDS"))
+	if staticRecords == "" {
+		staticRecords = strings.TrimSpace(os.Getenv("DNS_SWR_HARDCODED_RECORDS"))
+	}
+	if staticRecords == "" {
+		staticRecords = strings.TrimSpace(os.Getenv("DNS_SWR_HARDCODED_DNS"))
+	}
+	if staticRecords != "" {
+		records := parseStaticRecords(staticRecords)
+		if len(records) > 0 {
+			if c.Static.Records == nil {
+				c.Static.Records = map[string]string{}
+			}
+			for domain, ip := range records {
+				c.Static.Records[domain] = ip
+			}
+		}
+	}
+
+	staticTTL := strings.TrimSpace(os.Getenv("DNS_SWR_STATIC_TTL"))
+	if staticTTL != "" {
+		if ttl, err := strconv.ParseUint(staticTTL, 10, 32); err == nil && ttl > 0 {
+			c.Static.TTL = uint32(ttl)
+		}
 	}
 }
 
@@ -237,6 +285,18 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("cache.persistence must be memory or bbolt")
 	}
+	if c.Static.TTL == 0 {
+		return fmt.Errorf("static.ttl must be greater than zero")
+	}
+	for domain, ip := range c.Static.Records {
+		if strings.TrimSpace(domain) == "" {
+			return fmt.Errorf("static.records contains an empty domain")
+		}
+		parsed := net.ParseIP(strings.TrimSpace(ip))
+		if parsed == nil || parsed.To4() == nil {
+			return fmt.Errorf("static.records[%q] must be an IPv4 address", domain)
+		}
+	}
 	return nil
 }
 
@@ -246,11 +306,12 @@ func (c Config) Summary() string {
 		admin = "enabled@" + c.Admin.Address
 	}
 	return fmt.Sprintf(
-		"udp=%q tcp=%q admin=%s upstreams=%d cache=%s maxStale=%s staleClientTTL=%d",
+		"udp=%q tcp=%q admin=%s upstreams=%d staticRecords=%d cache=%s maxStale=%s staleClientTTL=%d",
 		c.Listen.UDP,
 		c.Listen.TCP,
 		admin,
 		len(c.Upstreams),
+		len(c.Static.Records),
 		c.Cache.Persistence,
 		c.Cache.MaxStale,
 		c.Cache.StaleClientTTL,
@@ -289,4 +350,45 @@ func normalizeProviderAddress(address string) string {
 		address = strings.TrimPrefix(strings.TrimSuffix(address, "]"), "[")
 	}
 	return net.JoinHostPort(address, "53")
+}
+
+func parseStaticRecords(value string) map[string]string {
+	records := map[string]string{}
+	for _, part := range strings.Split(value, ",") {
+		domain, ip, ok := splitStaticRecord(part)
+		if !ok {
+			continue
+		}
+		records[normalizeStaticDomain(domain)] = strings.TrimSpace(ip)
+	}
+	return records
+}
+
+func splitStaticRecord(value string) (string, string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", "", false
+	}
+	if before, after, ok := strings.Cut(value, "="); ok {
+		return strings.TrimSpace(before), strings.TrimSpace(after), strings.TrimSpace(before) != "" && strings.TrimSpace(after) != ""
+	}
+	if before, after, ok := strings.Cut(value, ":"); ok {
+		return strings.TrimSpace(before), strings.TrimSpace(after), strings.TrimSpace(before) != "" && strings.TrimSpace(after) != ""
+	}
+	return "", "", false
+}
+
+func normalizeStaticDomain(domain string) string {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return ""
+	}
+	return strings.ToLower(ensureFQDN(domain))
+}
+
+func ensureFQDN(name string) string {
+	if strings.HasSuffix(name, ".") {
+		return name
+	}
+	return name + "."
 }

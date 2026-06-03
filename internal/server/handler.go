@@ -72,6 +72,10 @@ func (h *Handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
+	if h.tryStaticRecord(w, r, qname, qtype, start) {
+		return
+	}
+
 	key, _, ok := dnsmsg.QuestionKey(r)
 	if !ok {
 		h.writeFailure(w, r, dns.RcodeFormatError)
@@ -159,6 +163,60 @@ func (h *Handler) recordBlockedQuery(qtype uint16) {
 	case dns.TypeAAAA:
 		h.metrics.IncAAAARefused()
 	}
+}
+
+func (h *Handler) tryStaticRecord(w dns.ResponseWriter, r *dns.Msg, qname, qtype string, start time.Time) bool {
+	if h.config == nil || len(h.config.Static.Records) == 0 || len(r.Question) == 0 {
+		return false
+	}
+	q := r.Question[0]
+	if q.Qtype != dns.TypeA || q.Qclass != dns.ClassINET {
+		return false
+	}
+
+	ipString, ok := h.config.Static.Records[dns.Fqdn(qname)]
+	if !ok {
+		return false
+	}
+	ip := net.ParseIP(ipString).To4()
+	if ip == nil {
+		h.logInfo("static_record_invalid", "qname", qname, "ip", ipString)
+		return false
+	}
+
+	msg := new(dns.Msg)
+	msg.SetReply(r)
+	msg.Authoritative = false
+	msg.RecursionAvailable = true
+	msg.Answer = []dns.RR{
+		&dns.A{
+			Hdr: dns.RR_Header{
+				Name:   q.Name,
+				Rrtype: dns.TypeA,
+				Class:  dns.ClassINET,
+				Ttl:    h.config.Static.TTL,
+			},
+			A: ip,
+		},
+	}
+
+	if err := w.WriteMsg(msg); err != nil {
+		h.logInfo("client_write_failed", "qname", qname, "qtype", qtype, "error", err.Error())
+		return true
+	}
+	if h.metrics != nil {
+		h.metrics.IncStaticHits()
+	}
+	h.logInfo(
+		"static_record_answered",
+		"remote", remoteAddr(w),
+		"qname", qname,
+		"qtype", qtype,
+		"ip", ipString,
+		"ttl", h.config.Static.TTL,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	return true
 }
 
 func (h *Handler) tryCache(w dns.ResponseWriter, r *dns.Msg, key, qname, qtype string, start time.Time) bool {

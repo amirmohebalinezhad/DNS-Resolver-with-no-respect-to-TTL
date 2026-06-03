@@ -118,6 +118,51 @@ func TestAAAARefusedBypassesResolverAndCache(t *testing.T) {
 	}
 }
 
+func TestStaticRecordBypassesResolverAndCache(t *testing.T) {
+	cfg := testConfig()
+	cfg.Static.Records = map[string]string{"router.lan.": "192.168.88.1"}
+	cfg.Static.TTL = 120
+	store := cache.NewMemoryStore(nil)
+	fake := &fakeResolver{fn: answerA}
+	handler := testHandler(cfg, store, fake)
+
+	req := new(dns.Msg)
+	req.SetQuestion("router.lan.", dns.TypeA)
+	req.Id = 4321
+	w := &testResponseWriter{}
+
+	handler.ServeDNS(w, req)
+
+	if w.msg == nil {
+		t.Fatal("expected response")
+	}
+	if w.msg.Rcode != dns.RcodeSuccess {
+		t.Fatalf("rcode = %s, want NOERROR", dns.RcodeToString[w.msg.Rcode])
+	}
+	if w.msg.Id != 4321 {
+		t.Fatalf("response id = %d, want 4321", w.msg.Id)
+	}
+	if got := fake.calls.Load(); got != 0 {
+		t.Fatalf("resolver calls = %d, want 0", got)
+	}
+	if got := store.Len(); got != 0 {
+		t.Fatalf("cache entries = %d, want 0", got)
+	}
+	if len(w.msg.Answer) != 1 {
+		t.Fatalf("answers = %d, want 1", len(w.msg.Answer))
+	}
+	answer, ok := w.msg.Answer[0].(*dns.A)
+	if !ok {
+		t.Fatalf("answer type = %T, want *dns.A", w.msg.Answer[0])
+	}
+	if got, want := answer.A.String(), "192.168.88.1"; got != want {
+		t.Fatalf("answer ip = %q, want %q", got, want)
+	}
+	if got, want := answer.Hdr.Ttl, uint32(120); got != want {
+		t.Fatalf("answer ttl = %d, want %d", got, want)
+	}
+}
+
 func TestFreshCacheHit(t *testing.T) {
 	cfg := testConfig()
 	cfg.Cache.MaxFreshClientTTL = 60

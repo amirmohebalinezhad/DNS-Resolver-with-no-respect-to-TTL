@@ -17,6 +17,7 @@ It is not a recursive resolver and it is not authoritative DNS. It forwards quer
 - Optional bbolt persistence
 - Negative caching for NXDOMAIN and NODATA
 - TXT and AAAA query refusal before cache or upstream access
+- Static A records from env or YAML before cache or upstream access
 - JSON `slog` structured logs
 - Admin `/health`, `/stats`, and `/cache/flush` endpoints
 
@@ -57,6 +58,28 @@ DNS_SWR_UPSTREAMS="1.1.1.1,8.8.8.8:53,9.9.9.9" dns-swr -config configs/config.ex
 
 Bare providers automatically use port `53`. `DNS_SWR_REMOTE_DNS_PROVIDERS` is also accepted as an alias.
 
+## Static Records
+
+Hardcoded IPv4 A records can be provided from the environment:
+
+```bash
+DNS_SWR_STATIC_RECORDS="router.lan=192.168.88.1,api.local:10.0.0.5" \
+DNS_SWR_STATIC_TTL=120 \
+dns-swr -config configs/config.example.yaml
+```
+
+Both `domain=ip` and `domain:ip` entries are accepted. Matching `A` queries are answered locally and are not cached or forwarded upstream. `DNS_SWR_HARDCODED_RECORDS` and `DNS_SWR_HARDCODED_DNS` are accepted as aliases.
+
+YAML can also define static records:
+
+```yaml
+static:
+  ttl: 60
+  records:
+    router.lan: "192.168.88.1"
+    api.local: "10.0.0.5"
+```
+
 ## Cache Behavior
 
 Fresh answers are returned immediately from cache. The client-facing TTL is:
@@ -75,7 +98,7 @@ Stale hits trigger an asynchronous refresh. A refresh only replaces the cache wh
 
 Negative answers are cached for `cache.negativeCacheTTL`. Stale negative answers are not served unless `cache.serveStaleForNegative` is set to `true`.
 
-TXT queries are never cached. Blocked TXT and AAAA queries are refused before cache and upstream logic.
+TXT queries are never cached. Blocked TXT and AAAA queries are refused before cache and upstream logic. Static A records are answered before cache and upstream logic.
 
 ## Admin API
 

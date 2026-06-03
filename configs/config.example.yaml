@@ -30,3 +30,7 @@ policy:
   blockTXT: true
   blockAAAA: true
   retryOnSERVFAIL: true
+
+static:
+  ttl: 60
+  records: {}
